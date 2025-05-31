@@ -1,0 +1,13 @@
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# .env dosyasının varlığını kontrol et
+env_path = Path('.env')
+if env_path.exists():
+    print(".env file found!")
+    load_dotenv(env_path)
+else:
+    print(".env file not found!")
+    
+
