@@ -21,6 +21,29 @@ def setup_logging():
     )
     return logging.getLogger(__name__)
 
+def get_mexc_futures_pairs(logger, headers):
+    """MEXC'teki tüm futures çiftlerini çeker."""
+    url = "https://api.mexc.com/api/v3/exchangeInfo"
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status() # HTTP hatalarını yakala
+        
+        current_pairs = set()
+        for symbol_info in response.json()['symbols']:
+            # Futures tokenleri için USDT çiftlerini ve aktif işlemde olanları al
+            if symbol_info['symbol'].endswith('USDT') and symbol_info['status'] == 'TRADING':
+                current_pairs.add(symbol_info['symbol'])
+        return current_pairs
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API isteği hatası: {e}")
+        return None
+    except KeyError:
+        logger.error("API yanıtında 'symbols' anahtarı bulunamadı veya yanıt beklenenden farklı.")
+        return None
+    except Exception as e:
+        logger.error(f"Piyasa çiftlerini çekerken beklenmeyen hata: {e}")
+        return None
+
 def wait_for_new_mexc_futures():
     """Yeni futures token listelenene kadar bekler ve ilk yeni tokeni döndürür"""
     
@@ -38,31 +61,25 @@ def wait_for_new_mexc_futures():
     logger.info("MEXC yeni token tarayıcısı başlatıldı")
     
     # Başlangıç çiftlerini al
-    try:
-        url = "https://api.mexc.com/api/v3/exchangeInfo"
-        response = requests.get(url, headers=headers)
-        initial_pairs = set()
-        
-        for symbol in response.json()['symbols']:
-            if symbol['symbol'].endswith('USDT') and symbol['status'] == 'TRADING':
-                initial_pairs.add(symbol['symbol'])
-        
-        logger.info(f"Başlangıç: {len(initial_pairs)} futures çifti bulundu")
-        
-    except Exception as e:
-        logger.error(f"Başlangıç hatası: {e}")
-        return None
+    initial_pairs = None
+    while initial_pairs is None:
+        logger.info("Başlangıç futures çiftleri listesi çekiliyor...")
+        initial_pairs = get_mexc_futures_pairs(logger, headers)
+        if initial_pairs is None:
+            logger.warning("Başlangıç çiftleri çekilemedi, 30 saniye sonra tekrar denenecek.")
+            time.sleep(30) # Hata durumunda bekle
+    
+    logger.info(f"Başlangıç: {len(initial_pairs)} futures çifti bulundu.")
     
     # Yeni token için sürekli kontrol
     while True:
         try:
-            response = requests.get(url, headers=headers)
-            current_pairs = set()
-            
-            for symbol in response.json()['symbols']:
-                if symbol['symbol'].endswith('USDT') and symbol['status'] == 'TRADING':
-                    current_pairs.add(symbol['symbol'])
-            
+            current_pairs = get_mexc_futures_pairs(logger, headers)
+            if current_pairs is None:
+                logger.warning("Güncel çiftler çekilemedi, bir sonraki döngüde tekrar denenecek.")
+                time.sleep(10) # Hata durumunda beklemeden önce 10 saniye bekle
+                continue
+
             # Yeni çift var mı kontrol et
             new_pairs = current_pairs - initial_pairs
             
@@ -74,6 +91,10 @@ def wait_for_new_mexc_futures():
                 logger.info(f"Token: {new_token} - Tarih: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 
                 print(f"🚀 Yeni futures token bulundu: {new_token}")
+                
+                # Yeni token bulunduğunda initial_pairs'ı güncelle
+                initial_pairs = current_pairs 
+                
                 return new_token
             
             # Her 10 kontrol'da bir durum log'u
@@ -88,5 +109,5 @@ def wait_for_new_mexc_futures():
             time.sleep(10)  # 10 saniye bekle
             
         except Exception as e:
-            logger.error(f"Kontrol hatası: {e}")
-            time.sleep(30)
+            logger.error(f"Kontrol döngüsünde beklenmeyen hata: {e}")
+            time.sleep(30) # Hata durumunda 30 saniye bekle
